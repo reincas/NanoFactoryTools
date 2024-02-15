@@ -190,14 +190,14 @@ class LayerBisect(object):
         # edge. Set corrected lower edge to the maximum of all these
         # scan ranges.
         i = (z0_miss < lower) & (z1_miss > lower)
-        lower = np.max(z1_miss[i])
+        if any(i)
+            lower = np.max(z1_miss[i])
         
         # Determine all negative focus scans crossing the current upper
         # edge. Set corrected upper edge to the minimum of all these
-        # scan ranges. The case upper == zmax (len(i) == 0) needs
-        # special consideration.
+        # scan ranges.
         i = (z0_miss < upper) & (z1_miss > upper)
-        if len(i) > 0:
+        if any(i):
             upper = np.max(z0_miss[i])
 
         # Initialize the array for the upper and lower estimates (axis
@@ -474,7 +474,7 @@ class Layer(Parameter):
         
         # Initialize focus detection
         focus_args = focus_args or {}
-        self.focus = Focus(self.system, logger, **focus_args)
+        self.focus = Focus(self.system, logger, self.config, **focus_args)
         
         # No result yet
         self.steps = None
@@ -546,7 +546,7 @@ class Layer(Parameter):
 
         # Move stages back to initial position
         if home:
-            self.system.moveabs(wait="XYZ", x=x0, y=y0, z=z0)
+            self.system.moveabs(x=x0, y=y0, z=z0)
         
 
     def _detect(self, x, y, zlo, zup, dz, path=None):
@@ -611,7 +611,8 @@ class Layer(Parameter):
             bi, z_lower, z_upper, dz_lower, dz_upper = bisect.result()
 
             # Store parameters and results of this step
-            steps.append(dict(self.focus.exposure).update({
+            step = dict(self.focus.exposure)
+            step.update({
                 "exposure": pos,
                 "focusStatus": self._hitvalue[hit],
                 "focusUuid": f.uuid,
@@ -621,7 +622,8 @@ class Layer(Parameter):
                 "zUpper": z_upper,
                 "dzUpper": dz_upper,
                 "finished": finished,
-                }))
+                })
+            steps.append(step)
 
             # Send info line to logger
             if bi:

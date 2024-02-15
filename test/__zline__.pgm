@@ -1,0 +1,29 @@
+
+DVAR $dz
+DVAR $dzhalf
+DVAR $fast
+DVAR $slow
+
+$fast = $global[0]
+$slow = $global[1]
+$dz = $global[2]
+$dzhalf = -0.5 * $dz
+
+LOOKAHEAD FAST
+CRITICAL START
+VELOCITY ON
+RAMP MODE RATE
+RAMP RATE 0.00000
+WAIT MODE AUTO
+INCREMENTAL
+
+LINEAR Z $dzhalf F $fast
+GALVO LASEROVERRIDE A ON
+LINEAR Z $dz F $slow
+GALVO LASEROVERRIDE A OFF
+LINEAR Z $dzhalf F $fast
+
+ABSOLUTE
+VELOCITY ON
+CRITICAL END
+END PROGRAM

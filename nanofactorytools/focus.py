@@ -16,7 +16,7 @@ from scidatacontainer import Container
 from nanofactorysystem import Parameter
 
 from . import image
-
+#np.seterr(invalid="ignore")
 
 # Status codes
 STATUS = ("focus", "no focus", "no contour", "off center",
@@ -152,15 +152,15 @@ class Focus(Parameter):
         z0 = self.system.position("Z")
 
         # Move to background z position
-        fast = self["speed"]
-        delay = self["delay"]
+        fast = self.system["speed"]
+        delay = self.system["delay"]
         self.system.moveabs(fast, delay, z=z0+dz)
 
         # Set exposure time for normalized image
-        self.camera.optExpose(127)
+        self.system.optexpose(127)
             
         # Take background image
-        img = self.getimage()
+        img = self.system.getimage()
 
         # Move to initial z position
         self.system.moveabs(fast, delay, z=z0)
@@ -184,7 +184,7 @@ class Focus(Parameter):
 
         # Expose axial line
         self.imgPre, self.imgPost, self.exposure \
-            = self.zline(self, x, y, z, dz, power, speed, duration)
+            = self.zline(x, y, z, dz, power, speed, duration)
         
         # Detect focus spot
         self.diff, self.result \

@@ -49,7 +49,7 @@ with System(sample, logger, config, **system_args) as system:
     x = system.x0
     y = system.y0
     z = system.z0
-    dz = 0.0
+    dz = 200.0
     power = 0.7
     speed= 200.0
     duration= 0.2

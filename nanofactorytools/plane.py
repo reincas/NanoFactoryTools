@@ -143,7 +143,7 @@ class Plane(Parameter):
 
         # Initialize layer object
         layer_args = layer_args or {}
-        self.layer = Layer(system, logger, self.config, focus_args, **layer_args)
+        self.layer = Layer(system, focus_args, logger, self.config, **layer_args)
 
         # Store initial values
         self.zlo = float(zlo)
@@ -157,8 +157,8 @@ class Plane(Parameter):
     def run(self, x, y, path=None, home=False):
 
         pos = len(self.steps)
-        subpath = mkdir("%s/layer" % path, clean=False)
-        subsubpath = mkdir("%s/layer-%02d" % (subpath, pos))
+        path = mkdir("%s/layer" % path, clean=False)
+        path = mkdir("%s/layer-%02d" % (path, pos))
 
         # Store current xyz position
         x0, y0, z0 = self.system.position("XYZ")
@@ -168,9 +168,9 @@ class Plane(Parameter):
             dz = self["dzCoarseDefault"]
         else:
             dz = self["dzFineDefault"]
-        result, steps = self.layer.run(x, y, self.zlo, self.zup, dz, subsubpath, home=False)
-        l = self.layer.container(result, steps)
-        l.write("%s/layer.zdc" % subsubpath)
+        self.layer.run(x, y, self.zlo, self.zup, dz, path, home=False)
+        l = self.layer.container()
+        l.write("%s/layer.zdc" % path)
 
         # Append results of this step
         self.steps.append({
