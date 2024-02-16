@@ -27,4 +27,4 @@ share/python-wheels/
 MANIFEST
 
 # Local
-test/test
+#test/test/
