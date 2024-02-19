@@ -11,6 +11,10 @@
 import bisect
 import numpy as np
 import cv2 as cv
+from scidatacontainer import Container
+from nanofactorysystem import Parameter
+
+from . import image
 
 
 def detectGrid(img, debug=False):
@@ -187,7 +191,7 @@ def detectGrid(img, debug=False):
     return points, idx, pitch, alpha, nx, ny, detect
 
 
-def focusRadius(img, center):
+def focusRadius(img, center, blur=4, size=20, thres=0.2):
 
     """ Determine focus quality based on the size of a set of Airy disks
     at given locations on a camera image.
@@ -201,9 +205,8 @@ def focusRadius(img, center):
     Return value: Average effective radius of the high level area in
     pixels. """
 
-    # Parameters
-    size = 20
-    thres = 0.2
+    # Blur the camera image
+    img = image.blur(img, blur)
 
     # Determine and evaluate every tile
     h, w = img.shape
@@ -294,3 +297,137 @@ def getTransform(src, w, h, dst, nx, ny, dx, dy):
 
     # Return results
     return A, ax, ay, bx, by, Fx, Fy, dr
+
+
+##########################################################################
+# Grid class
+##########################################################################
+
+class Grid(Parameter):
+
+    _defaults = {
+        "xNum": None,
+        "yNum": None,
+        "zNum": None,
+        "xStep": None,
+        "yStep": None,
+        "zStep": None,
+        "xOffset": None,
+        "yOffset": None,
+        "zOffset": None,
+        "laserPower": None,
+        "duration": None,
+        "zLower": None,
+        "zUpper": None,
+        "x": None,
+        "y": None,
+        "z": None
+        }
+
+    def __init__(self, system, config=None, logger=None, **kwargs):
+
+        """ Initialize the camera calibration class. """
+
+        # Initialize parameter class
+        super().__init__(logger, config, **kwargs)
+        self.log.info("Initializing camera calibration.")
+
+        # Store system object
+        self.system = system
+        
+        # No results yet
+        self.preImg = None
+        self.postImg = None
+        self.imgParams = None
+        self.log.info("Initialized camera calibration.")
+        
+
+    def _getimages(self, z0, nz, dz):
+        
+        """ Return a list of camera images and an image parameter
+        dictionary. """
+
+        images = []
+        for i in range(nz):
+            z = z0 + (i - (nz-1)/2)*dz
+            self.system.moveabs(z=z, wait="Z")
+            dc = self.system.getimage()
+            img = dc["meas/image.png"]
+            images.append(img)
+
+        params = dc["meas/image.json"]
+        return images, params
+
+
+    def run(self, x0, y0, nx, ny):
+        
+        """ Expose a grid of (nx,ny) spots in the center of the photoresin. 
+        Generate the list of pre-exposure images, the list of post-exposure
+        images and the common image parameter dictionary. """
+
+        z0 = 0.5 * (self["zLower"] + self["zUpper"]) + self["zOffset"]
+        self["x"] = x0
+        self["y"] = y0
+        self["z"] = z0
+        self["xNum"] = nx
+        self["yNum"] = ny
+
+        self.log.info("Take pre-exposure images")
+        self.system.moveabs(x=x0, y=y0, wait="XY")
+        nz = self["zNum"]
+        dz = self["zStep"]
+        self.preImg, _ = self._getimages(z0, nz, dz)
+
+        self.log.info("Expose %d x %d points" % (nx, ny))
+        dx = self["xStep"]
+        dy = self["yStep"]
+        power = self["laserPower"]
+        dt = self["duration"]
+        for i in range(nx):
+            for j in range(ny):
+                x = x0 + dx*(i - (nx-1)/2)
+                y = y0 + dy*(j - (ny-1)/2)
+                self.system.moveabs(x=x, y=y, z=z0, wait="XYZ")
+                self.system.pulse(power, dt)
+
+        self.log.info("Take post-exposure images")
+        self.system.moveabs(x=x0, y=y0, wait="XY")
+        self.postImg, self.imgParams = self._getimages(z0, nz, dz)
+
+
+    def container(self, config=None, **kwargs):
+
+        """ Return results as SciDataContainer. """
+
+        if self.preImg is None:
+            raise RuntimeError("No results!")
+
+        # General metadata
+        content = {
+            "containerType": {"name": "DcPointGrid", "version": 1.0},
+            }
+        meta = {
+            "title": "TPP Camera Calibration Grid Images",
+            "description": "",
+            }
+
+        # Package dictionary
+        items = {
+            "content.json": content,
+            "meta.json": meta,
+            "data/system.json": self.system.parameters(),
+            "data/sample.json": self.system.sample,
+            "data/parameter.json": self.parameters(),
+            "meas/image.json": self.imgParams,
+            }
+
+        # Store pre- and post-exposure images
+        for i, img in enumerate(self.preImg):
+            items["meas/pre/image-%04d.png" % i] = img
+        for i, img in enumerate(self.postImg):
+            items["meas/post/image-%04d.png" % i] = img
+
+        # Return container object
+        config = config or self.config
+        return Container(items=items, config=config, **kwargs)
+

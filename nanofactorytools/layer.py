@@ -190,7 +190,7 @@ class LayerBisect(object):
         # edge. Set corrected lower edge to the maximum of all these
         # scan ranges.
         i = (z0_miss < lower) & (z1_miss > lower)
-        if any(i)
+        if any(i):
             lower = np.max(z1_miss[i])
         
         # Determine all negative focus scans crossing the current upper
@@ -579,6 +579,7 @@ class Layer(Parameter):
             path = mkdir("%s/focus" % path)
         finished = False
         steps = []
+        offsets = []
         while not finished:
             pos = len(steps)
             if path:
@@ -623,6 +624,13 @@ class Layer(Parameter):
                 "dzUpper": dz_upper,
                 "finished": finished,
                 })
+            if hit:
+                step.update({
+                    "focusOffset": self.focus.result["focusOffset"],
+                    "focusArea": self.focus.result["focusArea"],
+                    "circularity": self.focus.result["circularity"],
+                    })
+                offsets.append(self.focus.result["focusOffset"])
             steps.append(step)
 
             # Send info line to logger
@@ -640,11 +648,15 @@ class Layer(Parameter):
             self.log.debug("%-9s %16s -> %-9s | %s" % (step, z, hit, s))
 
         # Final result
+        dx, dy = np.mean(offsets, axis=0)
         result = {
             "zLower": z_lower,
             "dzLower": dz_lower,
             "zUpper": z_upper,
             "dzUpper": dz_upper,
+            "xOffset": dx,
+            "yOffset": dy,
+            "numFocus": len(offsets),
             }
 
         # Return final and intermediate results
