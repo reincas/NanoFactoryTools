@@ -171,6 +171,7 @@ class Plane(Parameter):
         self.layer.run(x, y, self.zlo, self.zup, dz, path, home=False)
         l = self.layer.container()
         l.write("%s/layer.zdc" % path)
+        result = l["meas/result.json"]
 
         # Append results of this step
         self.steps.append({
@@ -193,7 +194,8 @@ class Plane(Parameter):
         
         # Move stages back to initial position
         if home:
-            self.system.moveabs(wait="XYZ", x=x0, y=y0, z=z0)
+            delay = self.system["delay"]
+            self.system.moveabs(wait=delay, x=x0, y=y0, z=z0)
 
 
     def _pop_results(self):

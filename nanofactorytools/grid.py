@@ -8,6 +8,8 @@
 #
 ##########################################################################
 
+import hashlib ########## DEBUG
+
 import bisect
 import numpy as np
 import cv2 as cv
@@ -315,6 +317,8 @@ class Grid(Parameter):
         "xOffset": None,
         "yOffset": None,
         "zOffset": None,
+        "xScale": None,
+        "yScale": None,
         "laserPower": None,
         "duration": None,
         "zLower": None,
@@ -347,10 +351,11 @@ class Grid(Parameter):
         """ Return a list of camera images and an image parameter
         dictionary. """
 
+        delay = self.system["delay"]
         images = []
         for i in range(nz):
             z = z0 + (i - (nz-1)/2)*dz
-            self.system.moveabs(z=z, wait="Z")
+            self.system.moveabs(z=z, wait=delay)
             dc = self.system.getimage()
             img = dc["meas/image.png"]
             images.append(img)
@@ -365,7 +370,7 @@ class Grid(Parameter):
         Generate the list of pre-exposure images, the list of post-exposure
         images and the common image parameter dictionary. """
 
-        z0 = 0.5 * (self["zLower"] + self["zUpper"]) + self["zOffset"]
+        z0 = 0.5 * (self["zLower"] + self["zUpper"])
         self["x"] = x0
         self["y"] = y0
         self["z"] = z0
@@ -373,10 +378,14 @@ class Grid(Parameter):
         self["yNum"] = ny
 
         self.log.info("Take pre-exposure images")
-        self.system.moveabs(x=x0, y=y0, wait="XY")
+        delay = self.system["delay"]
+        x_off = self["xScale"] * self["xOffset"]
+        y_off = self["yScale"] * self["yOffset"]
+        z_off = self["zOffset"]
+        self.system.moveabs(x=x0+x_off, y=y0+y_off, wait=delay)
         nz = self["zNum"]
         dz = self["zStep"]
-        self.preImg, _ = self._getimages(z0, nz, dz)
+        self.preImg, _ = self._getimages(z0+z_off, nz, dz)
 
         self.log.info("Expose %d x %d points" % (nx, ny))
         dx = self["xStep"]
@@ -387,12 +396,12 @@ class Grid(Parameter):
             for j in range(ny):
                 x = x0 + dx*(i - (nx-1)/2)
                 y = y0 + dy*(j - (ny-1)/2)
-                self.system.moveabs(x=x, y=y, z=z0, wait="XYZ")
+                self.system.moveabs(x=x, y=y, z=z0, wait=delay)
                 self.system.pulse(power, dt)
 
         self.log.info("Take post-exposure images")
-        self.system.moveabs(x=x0, y=y0, wait="XY")
-        self.postImg, self.imgParams = self._getimages(z0, nz, dz)
+        self.system.moveabs(x=x0+x_off, y=y0+y_off, wait=delay)
+        self.postImg, self.imgParams = self._getimages(z0+z_off, nz, dz)
 
 
     def container(self, config=None, **kwargs):

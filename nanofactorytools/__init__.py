@@ -10,5 +10,5 @@ from .focus import Focus, mark_focus, STATUS, \
 from .layer import Layer, flex_round
 from .plane import Plane
 
-from .grid import detectGrid, focusRadius, getTransform
+from .grid import detectGrid, focusRadius, getTransform, Grid
 from .stitch import get_shear, Canvas, Shear, ShearCanvas

@@ -16,7 +16,7 @@ from scidatacontainer import Container
 from nanofactorysystem import Parameter
 
 from . import image
-#np.seterr(invalid="ignore")
+np.seterr(invalid="ignore")
 
 # Status codes
 STATUS = ("focus", "no focus", "no contour", "off center",
