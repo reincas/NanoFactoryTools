@@ -4,6 +4,7 @@
 # This program is free software under the terms of the MIT license.      #
 ##########################################################################
 
+import h5py
 from skimage.registration import phase_cross_correlation
 from scidatacontainer import load_config
 from nanofactorysystem import System, getLogger, mkdir
@@ -45,14 +46,15 @@ layer_args = {
     }
 
 zlo = zup = 25200.0
-path = mkdir("test/off")
+path = mkdir("test/pitch")
 logger = getLogger(logfile="%s/console.log" % path)
 
 logger.info("Initialize system object...")
 with System(sample, logger, config, **system_args) as system:
 
     sx = 0.2
-    sy = -0.2 
+    sy = -0.2
+    z_off = -7.0
     if 1:
         logger.info("Initialize layer object...")
         subpath = mkdir("%s/layer" % path)
@@ -75,7 +77,6 @@ with System(sample, logger, config, **system_args) as system:
         zup = result["zUpper"]
         x_off = sx * result["xOffset"]
         y_off = sy * result["yOffset"]
-        z_off = result["zOffset"]
     else:
         x = system.x0
         y = system.y0
@@ -83,40 +84,74 @@ with System(sample, logger, config, **system_args) as system:
         zup = 25261.0
         x_off = sx * -48
         y_off = sy * 5
-        z_off = -7.0
-        
+    
     z = 0.5 * (zlo + zup)
+    logger.info("Layer lo:   %.3f µm" % zlo)
+    logger.info("      up:   %.3f µm" % zup)
+    logger.info("Position x: %.3f µm" % x)
+    logger.info("         y: %.3f µm" % y)
+    logger.info("         z: %.3f µm" % z)
+    logger.info("Offset x:   %.3f µm" % x_off)
+    logger.info("       y:   %.3f µm" % y_off)
+    logger.info("       z:   %.3f µm" % z_off)
+    logger.info("Pitch x:    %.3f µm/px" % sx)
+    logger.info("      y:    %.3f µm/px" % sy)
 
     delay = system["delay"]
 
     dx = 2.0
     dy = 2.0
     size = 256
-    system.moveabs(x=x+x_off-dx, y=y+y_off-dy, z=z+z_off, wait=delay)
-    img0 = system.getimage()["meas/image.png"]
-    img0 = image.crop(img0, size)
-
     system.moveabs(x=x+x_off, y=y+y_off, z=z+z_off, wait=delay)
-    img1 = system.getimage()["meas/image.png"]
-    img1 = image.crop(img1, size)
+    imgC = system.getimage()["meas/image.png"]
+    imgC = image.crop(imgC, size)
 
-    system.moveabs(x=x+x_off+dx, y=y+y_off+dy, z=z+z_off, wait=delay)
-    img2 = system.getimage()["meas/image.png"]
-    img2 = image.crop(img2, size)
+    system.moveabs(x=x+x_off-dx, y=y+y_off, z=z+z_off, wait=delay)
+    imgW = system.getimage()["meas/image.png"]
+    imgW = image.crop(imgW, size)
 
-    diff0 = image.diff(img0, img1)
-    diff1 = image.diff(img1, img2)
-    y, x = phase_cross_correlation(diff0, diff1, upsample_factor=20,
-                                   overlap_ratio=0.3)[0]
-    sx = dx / x
-    sy = dy / y
-    print(x, y)
-    print(sx, sy)
+    system.moveabs(x=x+x_off+dx, y=y+y_off, z=z+z_off, wait=delay)
+    imgE = system.getimage()["meas/image.png"]
+    imgE = image.crop(imgE, size)
 
-    image.write("%s/img0.png" % path, img0)
-    image.write("%s/img1.png" % path, img1)
-    image.write("%s/img2.png" % path, img2)
-    image.write("%s/diff0.png" % path, diff0)
-    image.write("%s/diff1.png" % path, diff1)
+    system.moveabs(x=x+x_off, y=y+y_off-dy, z=z+z_off, wait=delay)
+    imgS = system.getimage()["meas/image.png"]
+    imgS = image.crop(imgS, size)
+
+    system.moveabs(x=x+x_off, y=y+y_off+dy, z=z+z_off, wait=delay)
+    imgN = system.getimage()["meas/image.png"]
+    imgN = image.crop(imgN, size)
+
+    diffE = image.diff(imgC, imgE)
+    diffW = image.diff(imgW, imgC)
+    pxy, pxx = phase_cross_correlation(diffW, diffE, upsample_factor=20, overlap_ratio=0.3)[0]
+    sx = dx / pxx
+
+    diffN = image.diff(imgC, imgN)
+    diffS = image.diff(imgS, imgC)
+    pyy, pyx = phase_cross_correlation(diffS, diffN, upsample_factor=20, overlap_ratio=0.3)[0]
+    sy = dy / pyy
+
+    logger.info("Calibration xx: %.3f px / %.1f µm (x)" % (pxx, dx))
+    logger.info("            xy: %.3f px / %.1f µm (x)" % (pxy, dx))
+    logger.info("            yx: %.3f px / %.1f µm (y)" % (pyx, dy))
+    logger.info("            yy: %.3f px / %.1f µm (y)" % (pyy, dy))
+    logger.info("Pitch x:    %.3f µm/px" % sx)
+    logger.info("      y:    %.3f µm/px" % sy)
+
+    fn = "%s/images.hdf5" % path
+    with h5py.File(fn, "w") as fp:
+        fp.create_dataset("imgC", data=imgC)
+        fp.create_dataset("imgW", data=imgW)
+        fp.create_dataset("imgE", data=imgE)
+        fp.create_dataset("imgS", data=imgS)
+        fp.create_dataset("imgN", data=imgN)
+        fp.create_dataset("diffW", data=diffW)
+        fp.create_dataset("diffE", data=diffE)
+        fp.create_dataset("diffS", data=diffS)
+        fp.create_dataset("diffN", data=diffN)
+
+    # with h5py.File(fn, "r") as fp:
+    #     imgC = fp["imgC"][...]
 
     logger.info("Done.")
