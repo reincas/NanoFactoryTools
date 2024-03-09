@@ -99,6 +99,7 @@ def blur(img, r):
         img = cv.GaussianBlur(img, (0,0), r, borderType=cv.BORDER_DEFAULT)
     return img
 
+
 def gauss(size, sigma, dx=0.0, dy=0.0, norm=False):
 
     """ Quadratic Gaussian kernel array with optional offset. """
