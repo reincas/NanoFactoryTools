@@ -11,7 +11,7 @@
 
 import numpy as np
 from scidatacontainer import Container
-from nanofactorysystem import Parameter, mkdir
+from nanofactorysystem import Parameter, popargs, mkdir
 
 from .layer import Layer
 
@@ -130,20 +130,22 @@ class Plane(Parameter):
         "dzFineDefault": 10.0,
         }
 
-    def __init__(self, zlo, zup, system, focus_args=None, layer_args=None, logger=None, config=None, **kwargs):
+    def __init__(self, zlo, zup, system, logger=None, **kwargs):
 
         """ Initialize the layer scan object. """
 
-        # Initialize parameter class
-        super().__init__(logger, config, **kwargs)
-        self.log.info("Initializing plane detector.")
-
         # Store system object
         self.system = system
+        user = self.system.username
+        
+        # Initialize parameter class
+        args = popargs(kwargs, "plane")
+        super().__init__(user, logger, **args)
+        self.log.info("Initializing plane detector.")
 
         # Initialize layer object
-        layer_args = layer_args or {}
-        self.layer = Layer(system, focus_args, logger, self.config, **layer_args)
+        args = popargs(kwargs, ("layer", "focus"))
+        self.layer = Layer(system, logger, **args)
 
         # Store initial values
         self.zlo = float(zlo)
@@ -243,21 +245,19 @@ class Plane(Parameter):
 
         # General metadata
         content = {
-            "containerType": {"name": "DcLayerPlane", "version": 1.0},
+            "containerType": {"name": "LayerPlane", "version": 1.1},
             }
         meta = {
-            "title": "TPP Layer Detection Data",
-            "description": "",
+            "title": "Plane Detection Data",
+            "description": "Detection of upper and lower photoresin interface planes.",
             }
 
         # Container dictionary
-        items = {
+        items = self.system.items() | {
             "content.json": content,
             "meta.json": meta,
             "references.json": refs,
-            "data/system.json": self.system.parameters(),
-            "data/sample.json": self.system.sample,
-            "data/parameter.json": self.parameters(),
+            "data/plane.json": self.parameters(),
             "meas/steps.json": steps,
             "meas/result.json": result,
             }

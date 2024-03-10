@@ -4,43 +4,37 @@
 # This program is free software under the terms of the MIT license.      #
 ##########################################################################
 
-from scidatacontainer import load_config
 from nanofactorysystem import System, getLogger, mkdir
 from nanofactorytools import Focus
 
-config = load_config(
-    author = "Reinhard Caspary",
-    email = "reinhard.caspary@phoenixd.uni-hannover.de",
-    organization = "Leibniz Universität Hannover",
-    orcid = "0000-0003-0460-6088")
-
-sample = {
-    "name": "#1",
-    "orientation": "top",
-    "substrate": "boro-silicate glass",
-    "substrateThickness": 700.0,
-    "material": "SZ2080",
-    "materialThickness": 75.0,
+args = {
+    "attenuator": {
+        "fitKind": "quadratic",
+        },
+    "controller": {
+        "zMax": 25700.0,
+        },
+    "sample": {
+        "name": "#1",
+        "orientation": "top",
+        "substrate": "boro-silicate glass",
+        "substrateThickness": 700.0,
+        "material": "SZ2080",
+        "materialThickness": 75.0,
+        },
+    "focus": {},
     }
 
-system_args = {
-    "name": "Laser Nanofactory",
-    "manufacturer": "Femtika",
-    "wavelength": 0.515,
-    "objective": "Zeiss 20x, NA 0.8",
-    "zMax": 25700.0,
-    }
-
-focus_args = {}
-
+user = "Reinhard"
+objective = "Zeiss 20x"
 path = mkdir("test/focus")
 logger = getLogger(logfile="%s/console.log" % path)
 
 logger.info("Initialize system object...")
-with System(sample, logger, config, **system_args) as system:
+with System(user, objective, logger, **args) as system:
     
     logger.info("Initialize focus object...")
-    focus = Focus(system, logger, config, **focus_args)
+    focus = Focus(system, logger, **args)
     
     logger.info("Store background image...")
     focus.imgBack.write("%s/back.zdc" % path)

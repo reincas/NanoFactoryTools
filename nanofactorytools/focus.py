@@ -13,7 +13,7 @@ import numpy as np
 import cv2 as cv
 from skimage.filters import threshold_otsu
 from scidatacontainer import Container
-from nanofactorysystem import Parameter
+from nanofactorysystem import Parameter, popargs
 
 from . import image
 np.seterr(invalid="ignore")
@@ -105,7 +105,7 @@ class Focus(Parameter):
         "focusOffset", "focusArea", "circularity" ]
 
 
-    def __init__(self, system, logger=None, config=None, **kwargs):
+    def __init__(self, system, logger=None, **kwargs):
 
         """ Initialize focus detector parameters using _defaults and the
         optional keyword arguments. Store the background camera image.
@@ -113,17 +113,18 @@ class Focus(Parameter):
 
         # Store system object
         self.system = system
+        user = self.system.username
         
         # Initialize parameter class
-        super().__init__(logger, config, **kwargs)
+        args = popargs(kwargs, "focus")
+        super().__init__(user, logger, **args)
         self.log.info("Initializing focus detector.")
 
         # Background image
         dz = self.system["backOffset"]
         self.imgBack = self.background(dz)
-        img = self.imgBack["meas/image.png"]
         shape = self["shape"]
-        self.back = image.crop(img, shape)
+        self.back = image.crop(self.imgBack.img, shape)
 
         # Mask of the center region
         r = self["centerRadius"]
@@ -249,8 +250,8 @@ class Focus(Parameter):
         the given pre- and post-exposure images. Return the difference
         image and the result dictionary. """
 
-        img0 = img0["meas/image.png"]
-        img1 = img1["meas/image.png"]
+        img0 = img0.img
+        img1 = img1.img
         result = {k: None for k in self._resultkeys}
         diff = self._difference(img0, img1, result)
         self._find(diff, result)
@@ -391,27 +392,25 @@ class Focus(Parameter):
 
         # General metadata
         content = {
-            "containerType": {"name": "DcFocusDetect", "version": 1.0},
+            "containerType": {"name": "FocusDetect", "version": 1.1},
             }
         meta = {
-            "title": "TPP Focus Detection Data",
-            "description": "",
+            "title": "Focus Detection Data",
+            "description": "Detection of laser focus spot on microscope image.",
             }
 
         # Container dictionary
-        items = {
+        items = self.system.items() | {
             "content.json": content,
             "meta.json": meta,
             "references.json": refs,
             "data/exposure.json": self.exposure,
-            "data/system.json": self.system.parameters(),
-            "data/sample.json": self.system.sample,
-            "data/image_back.json": self.imgBack["meas/image.json"],
-            "meas/image_pre.json": self.imgPre["meas/image.json"],
-            "meas/image_post.json": self.imgPost["meas/image.json"],
-            "eval/parameter.json": self.parameters(),
-            "eval/image_diff.png": self.diff,
-            "eval/result.json": self.result,
+            "data/image_back.json": self.imgBack.params,
+            "data/image_pre.json": self.imgPre.params,
+            "data/image_post.json": self.imgPost.params,
+            "data/focus.json": self.parameters(),
+            "meas/image_diff.png": self.diff,
+            "meas/result.json": self.result,
             }
 
         # Return container object

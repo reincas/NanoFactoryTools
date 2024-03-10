@@ -4,48 +4,42 @@
 # This program is free software under the terms of the MIT license.      #
 ##########################################################################
 
-from scidatacontainer import load_config
 from nanofactorysystem import System, getLogger, mkdir
 from nanofactorytools import Layer
 
-config = load_config(
-    author = "Reinhard Caspary",
-    email = "reinhard.caspary@phoenixd.uni-hannover.de",
-    organization = "Leibniz Universität Hannover",
-    orcid = "0000-0003-0460-6088")
-
-sample = {
-    "name": "#1",
-    "orientation": "top",
-    "substrate": "boro-silicate glass",
-    "substrateThickness": 700.0,
-    "material": "SZ2080",
-    "materialThickness": 75.0,
-    }
-
-system_args = {
-    "name": "Laser Nanofactory",
-    "manufacturer": "Femtika",
-    "wavelength": 0.515,
-    "objective": "Zeiss 20x, NA 0.8",
-    "zMax": 25700.0,
-    }
-
-focus_args = {}
-
-layer_args = {
-    "beta": 0.6,
+args = {
+    "attenuator": {
+        "fitKind": "quadratic",
+        },
+    "controller": {
+        "zMax": 25700.0,
+        },
+    "sample": {
+        "name": "#1",
+        "orientation": "top",
+        "substrate": "boro-silicate glass",
+        "substrateThickness": 700.0,
+        "material": "SZ2080",
+        "materialThickness": 75.0,
+        },
+    "focus": {},
+    "layer": {
+        "beta": 0.7,
+        },
     }
 
 zlo = zup = 25200.0
+
+user = "Reinhard"
+objective = "Zeiss 20x"
 path = mkdir("test/layer")
 logger = getLogger(logfile="%s/console.log" % path)
 
 logger.info("Initialize system object...")
-with System(sample, logger, config, **system_args) as system:
+with System(user, objective, logger, **args) as system:
 
     logger.info("Initialize layer object...")
-    layer = Layer(system, focus_args, logger, config, **layer_args)
+    layer = Layer(system, logger, **args)
 
     logger.info("Store background image...")
     layer.focus.imgBack.write("%s/back.zdc" % path)
@@ -55,6 +49,13 @@ with System(sample, logger, config, **system_args) as system:
     y = system.y0
     layer.run(x, y, zlo, zup, path=path)
 
+    logger.info("Run pitch detection...")
+    ((pxx, pxy), (pyx, pyy)) = layer.pitch()
+    logger.info("Camera pitch xx: %.3f µm/px" % pxx)
+    logger.info("Camera pitch xy: %.3f µm/px" % pxy)
+    logger.info("Camera pitch yx: %.3f µm/px" % pyx)
+    logger.info("Camera pitch yy: %.3f µm/px" % pyy)
+    
     logger.info("Store results...")
     dc = layer.container()
     dc.write("%s/layer.zdc" % path)

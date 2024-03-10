@@ -12,11 +12,12 @@
 import math
 #import random
 import numpy as np
+from skimage.registration import phase_cross_correlation
 from scidatacontainer import Container
-from nanofactorysystem import Parameter, mkdir
+from nanofactorysystem import Parameter, popargs, mkdir
 
+from . import image
 from .focus import S_FOCUS, S_NOFOCUS, Focus
-
 
 ##########################################################################
 def flex_round(value, uncertainty):
@@ -96,7 +97,7 @@ class LayerBisect(object):
 
         """ Initialize the layer scan object. """
 
-        # Maximum allowed z value
+        # Maximum allowed z position
         self.zmax = float(zmax)
         
         # Initial scan range is limited to maxmult*dz
@@ -446,7 +447,6 @@ class Layer(Parameter):
         "dzInit": None,
         "dzCoarseDefault": 100.0,
         "dzFineDefault": 10.0,
-        "zMax": None,
         "maxMult": 5.0,
         "laserPower": 0.7,
         "stageSpeed": 200.0,
@@ -460,21 +460,25 @@ class Layer(Parameter):
     _hitvalue = {False: "no focus", None: "ambiguous", True: "focus"}
     
     
-    def __init__(self, system, focus_args=None, logger=None, config=None, **kwargs):
+    def __init__(self, system, logger=None, **kwargs):
 
         """ Initialize the layer scan object. """
 
-        # Initialize parameter class
-        super().__init__(logger, config, **kwargs)
-        self.log.info("Initializing layer detector.")
-
         # Store system object
         self.system = system
-        self["zMax"] = self.system["zMax"]
+        user = self.system.username
         
+        # Initialize parameter class
+        args = popargs(kwargs, "layer")
+        super().__init__(user, logger, **args)
+        self.log.info("Initializing layer detector.")
+
+        # Store maximum allowed z position
+        self.zmax = self.system.controller["zMax"]
+
         # Initialize focus detection
-        focus_args = focus_args or {}
-        self.focus = Focus(self.system, logger, self.config, **focus_args)
+        args = popargs(kwargs, "focus")
+        self.focus = Focus(self.system, logger, self.config, **args)
         
         # No result yet
         self.steps = None
@@ -564,11 +568,10 @@ class Layer(Parameter):
         self["dzInit"] = float(dz)
 
         # Initialize the bisectioning object
-        zmax = self["zMax"]
         maxmult = self["maxMult"]
         beta = self["beta"]
         resolution = self["resolution"]
-        bisect = LayerBisect(zmax, maxmult, zlo, zup, dz, beta, resolution)
+        bisect = LayerBisect(self.zmax, maxmult, zlo, zup, dz, beta, resolution)
 
         power = self["laserPower"]
         speed = self["stageSpeed"]
@@ -663,6 +666,76 @@ class Layer(Parameter):
         return result, steps
 
 
+    def pitch(self):
+        
+        """ Improve the camera pitch matrix fron the configuration file by
+        registering images of the layer test structure in all for cardinal
+        directions. Store the new camera pitch matrix in the results
+        dictionary. """
+        
+        if not self.result:
+            raise RuntimeError("Run layer scan first!")
+            
+        # Lateral center of the test spiral
+        x = self["xCenter"]        
+        y = self["yCenter"]
+        
+        # Convert laser beam offset from pixel to micrometre
+        x_off = self.result["xOffset"]
+        y_off = self.result["yOffset"]
+        pitch = np.array(self.system.objective["cameraPitch"], dtype=float)
+        x_off, y_off = np.matmul(pitch, [x_off, y_off])
+
+        # Center of the resin layer
+        zlo = self.result["zLower"]
+        zup = self.result["zUpper"]
+        z = 0.5 * (zlo + zup)
+
+        # Estimated axial offset of camera focus
+        z_off = self.system.objective["cameraFocus"]
+
+        # Lateral camera shift
+        shift = self["lateralPitch"]
+        
+        # Size of AOI is twice the size of the test spiral
+        inv_pitch = np.linalg.inv(pitch)
+        size = round(np.sqrt(len(self.steps))) * self["lateralPitch"]
+        size += 2 * shift
+        size = np.matmul(inv_pitch, [size, size])
+        size = 2 * round(np.abs(size).max())
+
+        # Delay afer stage movement
+        delay = self.system["delay"]
+
+        # Take image in the center and all four cardinal directions
+        self.system.moveabs(x=x+x_off, y=y+y_off, z=z+z_off, wait=delay)
+        imgC = image.crop(self.system.getimage().img, size)
+        self.system.moveabs(x=x+x_off-shift, y=y+y_off, z=z+z_off, wait=delay)
+        imgW = image.crop(self.system.getimage().img, size)
+        self.system.moveabs(x=x+x_off+shift, y=y+y_off, z=z+z_off, wait=delay)
+        imgE = image.crop(self.system.getimage().img, size)
+        self.system.moveabs(x=x+x_off, y=y+y_off-shift, z=z+z_off, wait=delay)
+        imgS = image.crop(self.system.getimage().img, size)
+        self.system.moveabs(x=x+x_off, y=y+y_off+shift, z=z+z_off, wait=delay)
+        imgN = image.crop(self.system.getimage().img, size)
+
+        # Horizontal shift in pixels
+        diffE = image.diff(imgC, imgE)
+        diffW = image.diff(imgW, imgC)
+        pxy, pxx = phase_cross_correlation(diffW, diffE, upsample_factor=20, overlap_ratio=0.3)[0]
+    
+        # Vertical shift in pixels
+        diffN = image.diff(imgC, imgN)
+        diffS = image.diff(imgS, imgC)
+        pyy, pyx = phase_cross_correlation(diffS, diffN, upsample_factor=20, overlap_ratio=0.3)[0]
+
+        # Pixel pitch matrix    
+        inv_pitch = np.array([[pxx, pxy], [pyx, pyy]], dtype=float) / shift
+        pitch = np.linalg.inv(inv_pitch)
+        self.result["cameraPitch"] = pitch.tolist()
+        return pitch
+    
+
     def container(self, config=None, **kwargs):
 
         """ Return results as SciDataContainer. """
@@ -678,21 +751,19 @@ class Layer(Parameter):
 
         # General metadata
         content = {
-            "containerType": {"name": "DcLayerDetect", "version": 1.0},
+            "containerType": {"name": "LayerDetect", "version": 1.1},
             }
         meta = {
-            "title": "TPP Layer Detection Data",
-            "description": "",
+            "title": "Layer Detection Data",
+            "description": "Detection of upper and lower photoresin interfaces.",
             }
 
         # Container dictionary
-        items = {
+        items = self.system.items() | {
             "content.json": content,
             "meta.json": meta,
             "references.json": refs,
-            "data/system.json": self.system.parameters(),
-            "data/sample.json": self.system.sample,
-            "data/parameter.json": self.parameters(),
+            "data/layer.json": self.parameters(),
             "meas/steps.json": self.steps,
             "meas/result.json": self.result,
             }
