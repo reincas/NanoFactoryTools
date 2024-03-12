@@ -478,7 +478,7 @@ class Layer(Parameter):
 
         # Initialize focus detection
         args = popargs(kwargs, "focus")
-        self.focus = Focus(self.system, logger, self.config, **args)
+        self.focus = Focus(self.system, logger, **args)
         
         # No result yet
         self.steps = None
@@ -652,14 +652,17 @@ class Layer(Parameter):
 
         # Final result
         dx, dy = np.mean(offsets, axis=0)
+        sx, sy = np.std(offsets, axis=0)
         result = {
             "zLower": z_lower,
             "dzLower": dz_lower,
             "zUpper": z_upper,
             "dzUpper": dz_upper,
-            "xOffset": dx,
-            "yOffset": dy,
-            "numFocus": len(offsets),
+            "xOffsetMean": dx,
+            "yOffsetMean": dy,
+            "xOffsetStd": sx,
+            "yOffsetStd": sy,
+            "numOffset": len(offsets),
             }
 
         # Return final and intermediate results
@@ -681,8 +684,8 @@ class Layer(Parameter):
         y = self["yCenter"]
         
         # Convert laser beam offset from pixel to micrometre
-        x_off = self.result["xOffset"]
-        y_off = self.result["yOffset"]
+        x_off = self.result["xOffsetMean"]
+        y_off = self.result["yOffsetMean"]
         pitch = np.array(self.system.objective["cameraPitch"], dtype=float)
         x_off, y_off = np.matmul(pitch, [x_off, y_off])
 
@@ -719,20 +722,25 @@ class Layer(Parameter):
         self.system.moveabs(x=x+x_off, y=y+y_off+shift, z=z+z_off, wait=delay)
         imgN = image.crop(self.system.getimage().img, size)
 
-        # Horizontal shift in pixels
+        # Horizontal and vertical shift in pixels
         diffE = image.diff(imgC, imgE)
-        diffW = image.diff(imgW, imgC)
-        pxy, pxx = phase_cross_correlation(diffW, diffE, upsample_factor=20, overlap_ratio=0.3)[0]
-    
-        # Vertical shift in pixels
+        diffW = image.diff(imgW, imgC)    
         diffN = image.diff(imgC, imgN)
         diffS = image.diff(imgS, imgC)
-        pyy, pyx = phase_cross_correlation(diffS, diffN, upsample_factor=20, overlap_ratio=0.3)[0]
+        args = {
+            "normalization": None,
+            "upsample_factor": 20,
+            "overlap_ratio": 0.3
+            }
+        (pxy, pxx), err_x, _ = phase_cross_correlation(diffW, diffE, **args)
+        (pyy, pyx), err_y, _ = phase_cross_correlation(diffS, diffN, **args)
 
         # Pixel pitch matrix    
         inv_pitch = np.array([[pxx, pxy], [pyx, pyy]], dtype=float) / shift
         pitch = np.linalg.inv(inv_pitch)
         self.result["cameraPitch"] = pitch.tolist()
+        self.result["horzPitchCorrelation"] = err_x
+        self.result["vertPitchCorrelation"] = err_y
         return pitch
     
 
