@@ -30,51 +30,6 @@ def flex_round(value, uncertainty):
     return round(value, digits), round(uncertainty, digits)
 
 
-# ##########################################################################
-# class FocusDetector(object):
-
-#     """ Focus detection simulator for testing purposes. """
-
-#     def __init__(self, lower, upper, jitter, fuzzy):
-
-#         self.lower = float(lower)
-#         self.upper = float(upper)
-#         self.jitter_width = jitter
-#         self.fuzzy_width = fuzzy
-
-#     def jitter(self, z):
-
-#         return z + self.jitter_width * (random.betavariate(5, 5) - 0.5)
-
-#     def thres(self, x):
-
-#         w = self.fuzzy_width
-#         return 0.5*(1.0-np.sign(x)*(np.exp(-(abs(x)/w+np.log(np.e/2)-1))-1))
-        
-#     def detect(self, z, dz):
-
-#         z0 = z - 0.5*dz
-#         z1 = z + 0.5*dz
-
-#         lower = self.jitter(self.lower)
-#         upper = self.jitter(self.upper)
-#         if z1 <= lower:
-#             length = z1 - lower
-#         elif z0 >= upper:
-#             length = upper - z0
-#         else:
-#             length = min(z1, upper) - max(z0, lower)
-
-#         if self.fuzzy_width <= 0.0:
-#             result = length > 0.0
-#         else:
-#             thres = self.thres(length)
-#             result = random.random() < thres
-#         if (length > 0.0) != result:
-#             print("=== simulated error: %.2f ===" % length)
-#         return result
-
-
 ##########################################################################
 class LayerBisect(object):
 
@@ -466,7 +421,7 @@ class Layer(Parameter):
 
         # Store system object
         self.system = system
-        user = self.system.username
+        user = self.system.user["key"]
         
         # Initialize parameter class
         args = popargs(kwargs, "layer")
@@ -665,6 +620,9 @@ class Layer(Parameter):
             "numOffset": len(offsets),
             }
 
+        # Update current coordinate transformation matrix
+        self.system.update_pos("focus", dx, dy, sx, sy, len(offsets))
+
         # Return final and intermediate results
         return result, steps
 
@@ -680,46 +638,40 @@ class Layer(Parameter):
             raise RuntimeError("Run layer scan first!")
             
         # Lateral center of the test spiral
-        x = self["xCenter"]        
-        y = self["yCenter"]
+        x0 = self["xCenter"]        
+        y0 = self["yCenter"]
         
-        # Convert laser beam offset from pixel to micrometre
-        x_off = self.result["xOffsetMean"]
-        y_off = self.result["yOffsetMean"]
-        pitch = np.array(self.system.objective["cameraPitch"], dtype=float)
-        x_off, y_off = np.matmul(pitch, [x_off, y_off])
-
         # Center of the resin layer
         zlo = self.result["zLower"]
         zup = self.result["zUpper"]
-        z = 0.5 * (zlo + zup)
+        z0 = 0.5 * (zlo + zup)
 
-        # Estimated axial offset of camera focus
-        z_off = self.system.objective["cameraFocus"]
+        # Stage coordinates required to place the camera focus in the center
+        # of the test spiral
+        x, y, z = self.system.stage_pos([x0, y0, z0], [0, 0])
 
-        # Lateral camera shift
+        # Lateral camera shift for the test images
         shift = self["lateralPitch"]
         
         # Size of AOI is twice the size of the test spiral
-        inv_pitch = np.linalg.inv(pitch)
         size = round(np.sqrt(len(self.steps))) * self["lateralPitch"]
         size += 2 * shift
-        size = np.matmul(inv_pitch, [size, size])
+        size = self.system.camera_pos([size, size], [0, 0])
         size = 2 * round(np.abs(size).max())
 
-        # Delay afer stage movement
+        # Delay after stage movement
         delay = self.system["delay"]
 
         # Take image in the center and all four cardinal directions
-        self.system.moveabs(x=x+x_off, y=y+y_off, z=z+z_off, wait=delay)
+        self.system.moveabs(x=x, y=y, z=z, wait=delay)
         imgC = image.crop(self.system.getimage().img, size)
-        self.system.moveabs(x=x+x_off-shift, y=y+y_off, z=z+z_off, wait=delay)
+        self.system.moveabs(x=x-shift, y=y, z=z, wait=delay)
         imgW = image.crop(self.system.getimage().img, size)
-        self.system.moveabs(x=x+x_off+shift, y=y+y_off, z=z+z_off, wait=delay)
+        self.system.moveabs(x=x+shift, y=y, z=z, wait=delay)
         imgE = image.crop(self.system.getimage().img, size)
-        self.system.moveabs(x=x+x_off, y=y+y_off-shift, z=z+z_off, wait=delay)
+        self.system.moveabs(x=x, y=y-shift, z=z, wait=delay)
         imgS = image.crop(self.system.getimage().img, size)
-        self.system.moveabs(x=x+x_off, y=y+y_off+shift, z=z+z_off, wait=delay)
+        self.system.moveabs(x=x, y=y+shift, z=z, wait=delay)
         imgN = image.crop(self.system.getimage().img, size)
 
         # Horizontal and vertical shift in pixels
@@ -739,8 +691,14 @@ class Layer(Parameter):
         inv_pitch = np.array([[pxx, pxy], [pyx, pyy]], dtype=float) / shift
         pitch = np.linalg.inv(inv_pitch)
         self.result["cameraPitch"] = pitch.tolist()
+        self.result["cropSize"] = size
         self.result["horzPitchCorrelation"] = err_x
         self.result["vertPitchCorrelation"] = err_y
+        
+        # Update current coordinate transformation matrix
+        self.system.update_pos("layer", pitch, size, err_x, err_y)
+
+        # Done.
         return pitch
     
 

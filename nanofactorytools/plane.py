@@ -136,7 +136,7 @@ class Plane(Parameter):
 
         # Store system object
         self.system = system
-        user = self.system.username
+        user = self.system.user["key"]
         
         # Initialize parameter class
         args = popargs(kwargs, "plane")

@@ -8,25 +8,22 @@
 #
 ##########################################################################
 
-import hashlib ########## DEBUG
-
 import bisect
 import numpy as np
 import cv2 as cv
+from scipy.ndimage import maximum_filter
 from scidatacontainer import Container
-from nanofactorysystem import Parameter
+from nanofactorysystem import Parameter, popargs
 
 from . import image
 
 
-def detectGrid(img, debug=False):
+def detectGrid(img, logger, **params):
 
-    """ Point grid detector. The algorithm detects circular spots (Airy
-    disks) on the given image after application of a Gaussian blur with
-    given radius. The algorithm estimates a rotated quadratic mesh grid
-    on which the spots are located. The algorithm is designed to be
-    roubust against missing grid points and outliers, which are
-    rejected.
+    """ Point grid detector. The algorithm detects the focus spots in the given
+    burred difference image. The algorithm estimates a rotated quadratic mesh
+    grid on which the spots are located. The algorithm is designed to be
+    roubust against missing grid points and outliers, which are rejected.
 
     Return values: Nx2 array of valid spot locations, Nx2 array of
     integer grid positions of these spots, floating point edge length of
@@ -35,41 +32,29 @@ def detectGrid(img, debug=False):
     determined by the outmost spots. """
 
     # Parameters for the determination of outliers
-    minstep = 8.0 # 10.0
-    minsize = 12
-    minangle = 5e-3 # 5e-3
-    minoff = 2e-2 # 5e-3
-    maxdist = 0.45 # 0.05
-    
-    # Blob detector parameters for circle detection
-    params = cv.SimpleBlobDetector_Params()
-    params.minDistBetweenBlobs = 5.0 # 50.0
-    #params.minRepeatability = 2
-    #params.filterByColor = True
-    #params.blobColor = 0
-    params.filterByArea = True
-    params.minArea = 50.0
-    params.maxArea = 5000.0
-    params.minThreshold = 10.0
-    params.maxThreshold = 240.0
-    params.thresholdStep = 10.0
-    params.filterByCircularity = True
-    params.minCircularity = 0.6
-    params.maxCircularity = np.finfo("float32").max
-    params.filterByInertia = False
-    params.minInertiaRatio = 0.4
-    params.maxInertiaRatio = np.finfo("float32").max
-    params.filterByConvexity = True
-    params.minConvexity = 0.9
-    params.maxConvexity = np.finfo("float32").max
-    #params.collectContours = False
+    mindist = params["detectMinDist"]
+    minstep = params["detectMinStep"]
+    minsize = params["detectMinSize"]
+    minangle = params["detectMinAngle"]
+    minoff = params["detectMinOff"]
+    maxdist = params["detectMaxDist"]
 
-    # Find circular points in the image using the blob detector
-    detector = cv.SimpleBlobDetector.create(params)
-    mask = cv.normalize(img, None, 0, 255, cv.NORM_MINMAX, cv.CV_8U)
-    points = detector.detect(255-mask)
-    points = np.array([k.pt for k in points])
-    detect = np.array(points)
+    # Binary mask based on maximum filter
+    img = maximum_filter(img, size=mindist)
+    mean = 0.5 * (np.min(img) + np.max(img))
+    img = np.where(img > mean, 1, 0).astype(np.uint8)
+
+    # Detect all external contours in binary mask
+    contours = cv.findContours(img, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)[0]
+
+    # Determine center point of each contour
+    points = []
+    for cnt in contours:
+        M = cv.moments(cnt)
+        x = int(M['m10']/M['m00'])
+        y = int(M['m01']/M['m00'])
+        points.append((x, y))
+    points = np.array(points, dtype=int)
 
     ### DEBUG: Remove and add some points
     #idx = (3, 16, 27, 33)
@@ -91,14 +76,15 @@ def detectGrid(img, debug=False):
     # small distance groups with less than minsize members are
     # considered as outliers and discarded.
     dsort = np.sort(d)
-    groups = np.split(dsort, np.where(np.diff(dsort) > minstep)[0]+1)
+    groups = np.split(dsort, np.where(np.diff(dsort) > minstep)[0] + 1)
     k = 0
     while len(groups[k]) < minsize:
         k += 1
-    if debug and k != 0:
-        print("*** Warning: Outliers expected!")
+    if k != 0:
+        logger.warn("Outliers expected!")
     if k >= len(groups):
-        raise RuntimeError("Grid detection failed!")
+        logger.error("Detection of grid pitch failed!")
+        raise RuntimeError("Detection of grid pitch failed!")
     dmean = groups[k].mean()
 
     # Get the indices of all point pairs in the determined group. Grid
@@ -106,10 +92,10 @@ def detectGrid(img, debug=False):
     maxdiff = 1.2*(groups[k].max()-groups[k].min())
     jmin = np.argwhere(abs(d-dmean) < maxdiff).ravel()
     if len(jmin) < 4:
-        raise RuntimeError("Grid detection failed!")
+        logger.error("Detection of grid pitch failed!")
+        raise RuntimeError("Detection of grid pitch failed!")
     pitch = d[jmin].mean()
-    if debug:
-        print("Grid pitch: %.1f px" % pitch)
+    logger.info("Grid pitch: %.1f px" % pitch)
 
     # Rotation angles of the point pairs in the range between -pi/4 to
     # +pi/4. Valid pair distance vectors may direct in four directions:
@@ -133,12 +119,10 @@ def detectGrid(img, debug=False):
     if len(groups) > 1:
         num = len(angle) - len(groups[k])
         angle = groups[k]
-        if debug:
-            print("*** Warning: %d outliers ignored (angle)!" % num)
+        logger.warn("%d outliers ignored (angle)!" % num)
     angle = angle.mean()
     alpha = angle * 180.0/np.pi
-    if debug:
-        print("Grid angle: %.3f°" % (alpha))
+    logger.info("Grid angle: %.3f°" % (alpha))
 
     # Rotate points back to achieve horizontal and vertical grid
     # lines
@@ -159,9 +143,8 @@ def detectGrid(img, debug=False):
         if len(groups) > 1:
             num = len(off) - len(groups[k])
             off = groups[k]
-            if debug:
-                axis = ("x", "y")[i]
-                print("*** Warning: %d outliers ignored (offset %s)!" % (num, axis))
+            axis = ("x", "y")[i]
+            logger.warn("%d outliers ignored (offset %s)!" % (num, axis))
         offset.append(off.mean() * pitch)
     ox, oy = offset
 
@@ -180,8 +163,7 @@ def detectGrid(img, debug=False):
         num = len(points) - len(i)
         points = points[i,:]
         idx = idx[i,:]
-        if debug:
-            print("*** Warning: %d outliers removed (grid)!" % num)
+        logger.warn("%d outliers removed (grid)!" % num)
 
     # Determine grid size
     idx[:,0] -= idx[:,0].min()
@@ -190,57 +172,8 @@ def detectGrid(img, debug=False):
     ny = idx[:,1].max() + 1
 
     # Return points and parameters
-    return points, idx, pitch, alpha, nx, ny, detect
+    return points, idx, pitch, alpha, nx, ny
 
-
-def focusRadius(img, center, blur=4, size=20, thres=0.2):
-
-    """ Determine focus quality based on the size of a set of Airy disks
-    at given locations on a camera image.
-
-    Split the given image into quadratic tiles of edge length 2*size+1
-    centered at the given center points. The size of tiles exceeding
-    image borders are reduced symmetrically. For each tile the number of
-    high level pixels is determined. The threshold for high level is
-    given relative to the maximum pixel value in the respective tile.
-
-    Return value: Average effective radius of the high level area in
-    pixels. """
-
-    # Blur the camera image
-    img = image.blur(img, blur)
-
-    # Determine and evaluate every tile
-    h, w = img.shape
-    rnew = []
-    for i in range(len(center)):
-
-        # Bounding box of the tile
-        cx, cy = center[i]
-        x0 = round(cx - size)
-        x1 = round(cx + size)
-        y0 = round(cy - size)
-        y1 = round(cy + size)
-    
-        # Correct bounding box at image edges
-        if x0 < 0:
-            x0, x1 = 0, x0+x1
-        if x1 > w:
-            x0, x1 = x0+x1-w, w
-        if y0 < 0:
-            y0, y1 = 0, y0+y1
-        if y1 > h:
-            y0, y1 = y0+y1-h, h
-
-        # Number of pixels above threshold
-        v = np.sort(img[y0:y1,x0:x1].ravel())
-        v /= v[-1]
-        rnew.append(len(v) - bisect.bisect(v, thres))
-
-    # Return the average effective radius of the high level area in
-    # pixels
-    return np.sqrt(np.array(rnew).mean() / np.pi)
-    
 
 def getTransform(src, w, h, dst, nx, ny, dx, dy):
 
@@ -250,23 +183,19 @@ def getTransform(src, w, h, dst, nx, ny, dx, dy):
     size (nx, ny) and pitch (dx, dy) in micrometres. Both point sets are
     centered before the mapping.
 
-    Return values: Transformation matrix A of size 2x3, scaling factors
-    (ax, ay) in micrometres per pixel, shear angles (bx, by) in degrees,
-    center offset (Fx, Fy) in pixel, and the average derivation of the
-    points from their respective grid position in micrometres.
+    Return values: Transformation matrix A of size 2x3 and the average
+    derivation of the points from their respective grid position in
+    micrometres.
 
     x' = A[0,0]*x + A[0,1]*y + A[0,2]
     y' = A[1,0]*x + A[1,1]*y + A[1,2]
-
-    x' =  ax*cos(bx)*(x-Fx) + ay*sin(by)*(y-Fy) 
-    y' = -ax*sin(bx)*(x-Fx) + ay*cos(by)*(y-Fy)
 
     with coordinates (x',y') in micrometres and (x,y) in pixels. """
 
     # Center image coordinates
     src = np.array(src)
-    src[:,0] -= w/2
-    src[:,1] -= h/2
+    src[:,0] = src[:,0] - w/2
+    src[:,1] = src[:,1] - h/2
 
     # Center destination grid coordinates in micrometres
     x = (dst[:,0] - (nx-1)/2) * dx
@@ -277,15 +206,8 @@ def getTransform(src, w, h, dst, nx, ny, dx, dy):
     A, inliers = cv.estimateAffine2D(src, dst, True)
     if not all(inliers):
         num = len(src) - inliers.sum()
-        print("Estimation of transform failed for %d points!" % num)
+        print("***** Estimation of transform failed for %d points!" % num)
         #raise RuntimeError("Estimation of transform failed!")
-
-    # Scale factors in µm/pixel
-    ax, ay = np.sqrt((A[:,:2]*A[:,:2]).sum(axis=0))
-
-    # Shear angles in degrees
-    bx = np.arctan2(-A[1,0], A[0,0]) * 180.0/np.pi
-    by = np.arctan2(A[0,1], A[1,1]) * 180.0/np.pi
 
     # Mean derivation of a single point
     x = np.concatenate((src, np.ones((len(src), 1))), 1).T
@@ -293,12 +215,8 @@ def getTransform(src, w, h, dst, nx, ny, dx, dy):
     dr = np.sqrt((dr*dr).sum(axis=1))
     dr = dr.sum() / len(dr)
 
-    # Focus offset from camera center in pixel
-    M, b = A[:,:2], -A[:,2]
-    Fx, Fy = np.linalg.solve(M, b)
-
     # Return results
-    return A, ax, ay, bx, by, Fx, Fy, dr
+    return A, dr
 
 
 ##########################################################################
@@ -310,114 +228,244 @@ class Grid(Parameter):
     _defaults = {
         "xNum": None,
         "yNum": None,
-        "zNum": None,
-        "xStep": None,
-        "yStep": None,
-        "zStep": None,
-        "xOffset": None,
-        "yOffset": None,
-        "zOffset": None,
-        "xScale": None,
-        "yScale": None,
+        "gridPitch": None,
         "laserPower": None,
         "duration": None,
-        "zLower": None,
-        "zUpper": None,
         "x": None,
         "y": None,
-        "z": None
+        "z": None,
+        "detectMinDist": 16,
+        "detectMinStep": 8.0,
+        "detectMinSize": 12,
+        "detectMinAngle": 5e-3,
+        "detectMinOff": 2e-2,
+        "detectMaxDist": 0.45,
+        "focusCenterSize": 5,
+        "focusInitialNum": 9,
+        "focusInitialStep": 2.5,
+        "focusMinStep": 0.1,
         }
 
-    def __init__(self, system, config=None, logger=None, **kwargs):
+    def __init__(self, system, logger=None, **kwargs):
 
         """ Initialize the camera calibration class. """
 
-        # Initialize parameter class
-        super().__init__(logger, config, **kwargs)
-        self.log.info("Initializing camera calibration.")
-
         # Store system object
         self.system = system
-        
+        user = self.system.user["key"]
+
+        # Initialize parameter class
+        args = popargs(kwargs, "grid")
+        super().__init__(user, logger, **args)
+        self.log.info("Initializing camera calibration.")
+
         # No results yet
         self.preImg = None
         self.postImg = None
         self.imgParams = None
+        self.result = None
         self.log.info("Initialized camera calibration.")
-        
 
-    def _getimages(self, z0, nz, dz):
-        
-        """ Return a list of camera images and an image parameter
-        dictionary. """
 
+    def _focusValue(self, z, points, size, values):
+
+        """ Quantify the focus quality of the grid spots at given position of
+        the z stage utilizing the fact that the peak value of the Airy pattern
+        of a spot is maximized in the focal plane of the camera.
+
+        Pick a small quadratic region with given size centered at each grid
+        spot from the given list. Return the maximum value from the mean
+        values of each pixel in the region. The size must be an odd positive
+        number. """
+
+        # Get camera image at given position of the z stage
         delay = self.system["delay"]
-        images = []
-        for i in range(nz):
-            z = z0 + (i - (nz-1)/2)*dz
-            self.system.moveabs(z=z, wait=delay)
-            dc = self.system.getimage()
-            img = dc["meas/image.png"]
-            images.append(img)
+        self.system.moveabs(z=z, wait=delay)
+        img = self.system.getimage().img
 
-        params = dc["meas/image.json"]
-        return images, params
+        # Difference image with pre-exposure image
+        img = image.diff(self.preImg, img)
+
+        # Determine quality factor
+        r = (size - 1) // 2
+        simg = np.zeros((size, size), dtype=float)
+        for x, y in points:
+            simg += img[y-r:y+r+1,x-r:x+r+1]
+        simg /= len(points)
+        q = simg.max()
+
+        # Return quality factor
+        values.append((z, q))
+        return q
 
 
-    def run(self, x0, y0, nx, ny):
-        
-        """ Expose a grid of (nx,ny) spots in the center of the photoresin. 
+    def _autoFocus(self, z0, num, step, minstep, points, size):
+
+        # Get num focus values at distance step around z0
+        z = z0 - 0.5 * (num - 1) * step
+        values = []
+        while len(values) < num:
+            self._focusValue(z, points, size, values)
+            z += step
+
+        # Maximum focus value
+        imax = np.argmax([v for z,v in values])
+        zc, vc = values[imax]
+
+        # Next lower z position
+        if imax > 0:
+            zlo, vlo = values[imax-1]
+        else:
+            zlo, vlo = zc - step, None
+
+        # Next higher z position
+        if imax < len(values)-1:
+            zhi, vhi = values[imax+1]
+        else:
+            zhi, vhi = zc + step, None
+
+        # Eventually get focus value of next lower z position
+        while vlo is None:
+            vlo = self._focusValue(zlo, points, size, values)
+            if vlo > vc:
+                zhi, vhi = zc, vc
+                zc, vc = zlo, vlo
+                zlo, vlo = zlo - step, None
+
+        # Eventually get focus value of next higher z position
+        while vhi is None:
+            vhi = self._focusValue(zhi, points, size, values)
+            if vhi > vc:
+                zlo, vlo = zc, vc
+                zc, vc = zhi, vhi
+                zhi, vhi = zhi + step, None
+
+        # Bisectioning algorithm: Find maximum focus value
+        while max(zc-zlo, zhi-zc) > minstep:
+            self.log.info("%.1f, %.1f   %.1f, %.1f   %.1f, %.1f" % (zlo, vlo, zc, vc, zhi, vhi))
+
+            if zc-zlo > zhi-zc:
+                z = (zlo + zc) / 2
+                v = self._focusValue(z, points, size, values)
+                if v <= vc:
+                    zlo, vlo = z, v
+                else:
+                    zhi, vhi = zc, vc
+                    zc, vc = z, v
+            else:
+                z = (zc + zhi) / 2
+                v = self._focusValue(z, points, size, values)
+                if v <= vc:
+                    zhi, vhi = z, v
+                else:
+                    zlo, vlo = zc, vc
+                    zc, vc = z, v
+
+        # Sort list of all determined focus quality factors
+        i = np.argsort([z for z,v in values])
+        values = np.array(values)[i]
+        self.log.info("%.1f, %.1f   %.1f, %.1f   %.1f, %.1f" % (zlo, vlo, zc, vc, zhi, vhi))
+        return zc, values
+
+
+    def run(self, x0, y0, z0, nx, ny):
+
+        """ Expose a grid of (nx,ny) spots in the center of the photoresin.
         Generate the list of pre-exposure images, the list of post-exposure
         images and the common image parameter dictionary. """
 
-        z0 = 0.5 * (self["zLower"] + self["zUpper"])
+        # Dictionary for results
+        self.result = {}
+        
+        # Store grid parameters
         self["x"] = x0
         self["y"] = y0
         self["z"] = z0
         self["xNum"] = nx
         self["yNum"] = ny
 
-        self.log.info("Take pre-exposure images")
+        # Take pre-exposure image
+        self.log.info("Take pre-exposure image")
         delay = self.system["delay"]
-        x_off = self["xScale"] * self["xOffset"]
-        y_off = self["yScale"] * self["yOffset"]
-        z_off = self["zOffset"]
-        self.system.moveabs(x=x0+x_off, y=y0+y_off, wait=delay)
-        nz = self["zNum"]
-        dz = self["zStep"]
-        self.preImg, _ = self._getimages(z0+z_off, nz, dz)
+        x, y, z = self.system.stage_pos([x0, y0, z0], [0, 0])
+        self.system.moveabs(x=x, y=y, z=z, wait=delay)
+        dc = self.system.getimage()
+        self.preImg = dc.img
+        self.imgParams = dc.params
 
-        self.log.info("Expose %d x %d points" % (nx, ny))
-        dx = self["xStep"]
-        dy = self["yStep"]
+        # Expose grid
+        pitch_um = self["gridPitch"]
         power = self["laserPower"]
         dt = self["duration"]
+        self.log.info("Expose %d x %d points (pitch: %.1f µm)" % (nx, ny, pitch_um))
         for i in range(nx):
             for j in range(ny):
-                x = x0 + dx*(i - (nx-1)/2)
-                y = y0 + dy*(j - (ny-1)/2)
+                x = x0 + pitch_um*(i - (nx-1)/2)
+                y = y0 + pitch_um*(j - (ny-1)/2)
                 self.system.moveabs(x=x, y=y, z=z0, wait=delay)
                 self.system.pulse(power, dt)
 
-        self.log.info("Take post-exposure images")
-        self.system.moveabs(x=x0+x_off, y=y0+y_off, wait=delay)
-        self.postImg, self.imgParams = self._getimages(z0+z_off, nz, dz)
+        # Take post exposure image
+        self.log.info("Take post-exposure image")
+        x, y, z = self.system.stage_pos([x0, y0, z0], [0, 0])
+        self.system.moveabs(x=x, y=y, z=z, wait=delay)
+        self.postImg = self.system.getimage().img
+
+        # Localize grid spots on the difference image
+        params = self.parameters()
+        blur = params["detectMinDist"]
+        diff = image.diff(self.preImg, self.postImg, blur)
+        src, dst, pitch_px, angle, nxd, nyd = detectGrid(diff, self.log, **params)
+        self.log.info("Detected grid size:  %d x %d" % (nxd, nyd))
+        self.log.info("Detected grid pitch: %.1f px" % pitch_px)
+        self.log.info("Detected grid angle: %.3f°" % angle)
+        if nxd != nx or nyd != ny:
+            self.log.error("Wrong grid size!")
+            raise RuntimeError("Wrong grid size!")
+
+        # Run autofocus on grid spots
+        self.log.info("Start camera grid autofocus.")
+        num = self["focusInitialNum"]
+        step = self["focusInitialStep"]
+        minstep = self["focusMinStep"]
+        size = self["focusCenterSize"]
+        assert isinstance(size, int) and size > 0 and size % 2 == 1
+        zmax, values = self._autoFocus(z, num, step, minstep, src, size)
+        z_off = zmax - z0
+        values[:,0] -= z0
+        self.result["focusOffset"] = z_off
+        self.result["offsetValues"] = values.tolist()
+        self.log.info("Camera grid autofocus finished.")
+        self.log.info("Axial offset of camera focus: %.1f µm" % z_off)
+
+        # Update current coordinate transformation matrix
+        self.system.update_pos("auto", z_off, minstep)
+
+        # Get coordinate transformation matrix
+        h, w = diff.shape
+        A, dr = getTransform(src, w, h, dst, nx, ny, pitch_um, pitch_um)
+
+        # Update current coordinate transformation matrix
+        self.system.update_pos("grid", A, dr)
+        self.result["affineTransformation"] = self.system.transform.P.tolist()
+        self.result["spotDerivation"] = dr
+        
 
 
     def container(self, config=None, **kwargs):
 
         """ Return results as SciDataContainer. """
 
-        if self.preImg is None:
+        if self.result is None:
             raise RuntimeError("No results!")
 
         # General metadata
         content = {
-            "containerType": {"name": "DcPointGrid", "version": 1.0},
+            "containerType": {"name": "PointGrid", "version": 1.1},
             }
         meta = {
-            "title": "TPP Camera Calibration Grid Images",
-            "description": "",
+            "title": "Camera Calibration",
+            "description": "Grid-based camera calibration with auto-focus.",
             }
 
         # Package dictionary
@@ -425,16 +473,12 @@ class Grid(Parameter):
             "content.json": content,
             "meta.json": meta,
             "data/system.json": self.system.parameters(),
-            "data/sample.json": self.system.sample,
-            "data/parameter.json": self.parameters(),
-            "meas/image.json": self.imgParams,
+            "data/grid.json": self.parameters(),
+            "data/camera.json": self.imgParams,
+            "meas/image_pre.png": self.preImg,
+            "meas/image_post.png": self.postImg,
+            "meas/result.json": self.result,
             }
-
-        # Store pre- and post-exposure images
-        for i, img in enumerate(self.preImg):
-            items["meas/pre/image-%04d.png" % i] = img
-        for i, img in enumerate(self.postImg):
-            items["meas/post/image-%04d.png" % i] = img
 
         # Return container object
         config = config or self.config
